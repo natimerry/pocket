@@ -49,7 +49,7 @@ impl fmt::Display for UnaryOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self {
             UnaryOperator::Minus => write!(f, "-"),
-            UnaryOperator::Not => write!(f, "~"),
+            UnaryOperator::Not => write!(f, "!"),
         }
     }
 }
