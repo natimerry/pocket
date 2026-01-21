@@ -8,8 +8,6 @@ fn main() -> io::Result<()>{
     let mut user_input = String::new();
     let stdin = io::stdin();
     stdin.read_line(&mut user_input)?;
-    let result = Intrepreter::from_source(&user_input);
-    println!("Final result: {:?}", result);
-
+    let result = Intrepreter::from_source(&user_input,3,true);
     Ok(())
 }

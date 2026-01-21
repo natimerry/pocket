@@ -1,8 +1,8 @@
 use crate::parser::Rule;
 
-use std::{fmt, write};
+use std::{collections::HashMap, env, fmt, fs, path::Path, sync::OnceLock, write};
 #[derive(Debug, Copy, Clone)]
-pub enum Operator{
+pub enum Operator {
     And,
     Or,
     Xor,
@@ -12,13 +12,13 @@ pub enum Operator{
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum UnaryOperator{
+pub enum UnaryOperator {
     Minus,
     Not,
 }
 
 #[derive(Debug, Clone)]
-pub enum Node{
+pub enum Node {
     Immediate(i32),
     Cont(char, i32),
     UnaryExpr {
@@ -45,9 +45,9 @@ impl fmt::Display for Operator {
     }
 }
 
-impl fmt::Display for UnaryOperator{
+impl fmt::Display for UnaryOperator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self{
+        match &self {
             UnaryOperator::Minus => write!(f, "-"),
             UnaryOperator::Not => write!(f, "~"),
         }
@@ -66,14 +66,14 @@ impl fmt::Display for Node {
 }
 
 pub fn build_ast_from_expr(pair: pest::iterators::Pair<Rule>) -> Node {
-    match pair.as_rule(){
+    match pair.as_rule() {
         Rule::Expr => build_ast_from_expr(pair.into_inner().next().unwrap()),
         Rule::UnaryExpr => {
             let mut pair = pair.into_inner();
             let op = pair.next().unwrap();
             let child = pair.next().unwrap();
             let child = build_ast_from_term(child);
-            parse_unary_expr(op, child)            
+            parse_unary_expr(op, child)
         }
         Rule::BinaryExpr => {
             let mut pair = pair.into_inner();
@@ -99,23 +99,101 @@ pub fn build_ast_from_expr(pair: pest::iterators::Pair<Rule>) -> Node {
     }
 }
 
+fn load_defs() -> HashMap<char, i32> {
+    let mut map = HashMap::new();
+
+    let path = Path::new("defs.txt");
+    if !path.exists() {
+        return map;
+    }
+
+    let contents = fs::read_to_string(path).expect("failed to read defs.txt");
+
+    for (line_no, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let (k, v) = line
+            .split_once('=')
+            .unwrap_or_else(|| panic!("invalid defs.txt line {}", line_no + 1));
+
+        let key = k.trim().chars().next().expect("empty key in defs.txt");
+
+        let val: i32 = v
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("invalid value in defs.txt line {}", line_no + 1));
+
+        map.insert(key, val);
+    }
+
+    map
+}
+
+static DEFS: OnceLock<HashMap<char, i32>> = OnceLock::new();
+fn init_defs() -> HashMap<char, i32> {
+    let mut map = HashMap::new();
+    let out_dir = env::var("OUT_DIR").unwrap_or(".".to_owned());
+    let path = Path::new(&out_dir).join("defs.txt");
+
+    if !path.exists() {
+        return map;
+    }
+
+    let contents = fs::read_to_string(path).expect("failed to read defs.txt");
+
+    for (line_no, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let (k, v) = line
+            .split_once('=')
+            .unwrap_or_else(|| panic!("invalid defs.txt line {}", line_no + 1));
+
+        let key = k.trim().chars().next().expect("empty key in defs.txt");
+
+        let val: i32 = v
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("invalid value in defs.txt line {}", line_no + 1));
+
+        map.insert(key, val);
+    }
+
+    map
+}
+
+fn defs() -> &'static HashMap<char, i32> {
+    DEFS.get_or_init(init_defs)
+}
+
 fn build_ast_from_term(pair: pest::iterators::Pair<Rule>) -> Node {
     match pair.as_rule() {
         Rule::SET => {
             let istr = pair.as_str();
-            let (sign, _istr) = match &istr[..1]{
-                "-" => (-1, &istr[1..]),
-                "~" => (1, &istr[1..]),
+
+            let (sign, rest) = match istr.as_bytes().get(0) {
+                Some(b'-') => (-1, &istr[1..]),
+                Some(b'~') => (1, &istr[1..]),
                 _ => (1, istr),
             };
-            // HACK: for now we use the value of the char as the number for node 
-            let status_to_set: u32 = _istr.chars().nth(0).unwrap() as u32;
-            let set_name: char = _istr.chars().nth(0).unwrap();
-            Node::Cont(set_name, sign*(status_to_set as i32))
-        },
+
+            let set_name = rest.chars().next().expect("empty identifier");
+
+            let value = defs()
+                .get(&set_name)
+                .copied()
+                .unwrap_or(set_name as u32 as i32);
+
+            Node::Cont(set_name, sign * value)
+        }
         Rule::Int => {
             let istr = pair.as_str();
-            let (sign, istr) = match &istr[..1]{
+            let (sign, istr) = match &istr[..1] {
                 "-" => (-1, &istr[1..]),
                 "~" => (-1, &istr[1..]),
                 _ => (1, istr),
@@ -128,8 +206,8 @@ fn build_ast_from_term(pair: pest::iterators::Pair<Rule>) -> Node {
     }
 }
 
-fn parse_binary_expr(pair: pest::iterators::Pair<Rule>, lhs: Node, rhs: Node) -> Node{
-     Node::BinaryExpr {
+fn parse_binary_expr(pair: pest::iterators::Pair<Rule>, lhs: Node, rhs: Node) -> Node {
+    Node::BinaryExpr {
         op: match pair.as_str() {
             "&" => Operator::And,
             "|" => Operator::Or,
@@ -144,11 +222,13 @@ fn parse_binary_expr(pair: pest::iterators::Pair<Rule>, lhs: Node, rhs: Node) ->
     }
 }
 
-fn parse_unary_expr(pair: pest::iterators::Pair<Rule>, child: Node) -> Node{
-    Node::UnaryExpr { op: 
-        match pair.as_str(){
+fn parse_unary_expr(pair: pest::iterators::Pair<Rule>, child: Node) -> Node {
+    Node::UnaryExpr {
+        op: match pair.as_str() {
             "-" => UnaryOperator::Minus,
             "~" => UnaryOperator::Not,
             _ => unreachable!(),
-    }, child: Box::new(child)}
+        },
+        child: Box::new(child),
+    }
 }
